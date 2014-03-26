@@ -897,20 +897,8 @@ static __devinit int s2mps11_pmic_probe(struct platform_device *pdev)
 	}
 
 #ifdef MANUAL_RESET_CONTROL
-	if(!get_sec_debug_level()) {
-		s2mps11->mrstb_enabled = 1;
-		s2mps11->mrstb_status = 1;
-		ret = sysfs_create_group(&s2mps11->dev->kobj, &s2mps11_group);
-
-		if (ret) {
-			dev_err(s2mps11->dev,
-				"%s : failed to create sysfs attribute group\n",__func__);
-			goto err;
-		}
-	} else {
 		s2mps11->mrstb_enabled = 0;
 		s2mps11->mrstb_status = 0;
-	}
 #endif
 
 	return 0;
