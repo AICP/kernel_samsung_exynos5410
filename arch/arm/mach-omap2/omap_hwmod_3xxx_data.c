@@ -1128,12 +1128,13 @@ static struct omap_hwmod_ocp_if *omap3xxx_timer12_slaves[] = {
 	&omap3xxx_l4_core__timer12,
 };
 
-/* timer12 hwmod */
-static struct omap_hwmod omap3xxx_timer12_hwmod = {
-	.name		= "timer12",
-	.mpu_irqs	= omap3xxx_timer12_mpu_irqs,
-	.main_clk	= "gpt12_fck",
-	.prcm		= {
+static struct omap_hwmod omap3xxx_usb_host_hs_hwmod = {
+	.name		= "usb_host_hs",
+	.class		= &omap3xxx_usb_host_hs_hwmod_class,
+	.clkdm_name	= "usbhost_clkdm",
+	.mpu_irqs	= omap3xxx_usb_host_hs_irqs,
+	.main_clk	= "usbhost_48m_fck",
+	.prcm = {
 		.omap2 = {
 			.prcm_reg_id = 1,
 			.module_bit = OMAP3430_EN_GPT12_SHIFT,
@@ -1208,11 +1209,13 @@ static struct omap_hwmod_ocp_if *omap3xxx_wd_timer2_slaves[] = {
 	&omap3xxx_l4_wkup__wd_timer2,
 };
 
-static struct omap_hwmod omap3xxx_wd_timer2_hwmod = {
-	.name		= "wd_timer2",
-	.class		= &omap3xxx_wd_timer_hwmod_class,
-	.main_clk	= "wdt2_fck",
-	.prcm		= {
+static struct omap_hwmod omap3xxx_usb_tll_hs_hwmod = {
+	.name		= "usb_tll_hs",
+	.class		= &omap3xxx_usb_tll_hs_hwmod_class,
+	.clkdm_name	= "core_l4_clkdm",
+	.mpu_irqs	= omap3xxx_usb_tll_hs_irqs,
+	.main_clk	= "usbtll_fck",
+	.prcm = {
 		.omap2 = {
 			.prcm_reg_id = 1,
 			.module_bit = OMAP3430_EN_WDT2_SHIFT,
