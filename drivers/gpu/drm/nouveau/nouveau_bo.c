@@ -945,8 +945,8 @@ nouveau_ttm_io_mem_reserve(struct ttm_bo_device *bdev, struct ttm_mem_reg *mem)
 #if __OS_HAS_AGP
 		if (dev_priv->gart_info.type == NOUVEAU_GART_AGP) {
 			mem->bus.offset = mem->start << PAGE_SHIFT;
-			mem->bus.base = dev_priv->gart_info.aper_base;
-			mem->bus.is_iomem = true;
+			mem->bus.base = drm->agp.base;
+			mem->bus.is_iomem = !dev->agp->cant_use_aperture;
 		}
 #endif
 		break;

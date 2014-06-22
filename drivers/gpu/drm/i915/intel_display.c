@@ -7240,10 +7240,17 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
 
 	spin_lock_irqsave(&dev->event_lock, flags);
 	work = intel_crtc->unpin_work;
-	if (work == NULL || !work->pending) {
+
+	/* Ensure we don't miss a work->pending update ... */
+	smp_rmb();
+
+	if (work == NULL || atomic_read(&work->pending) < INTEL_FLIP_COMPLETE) {
 		spin_unlock_irqrestore(&dev->event_lock, flags);
 		return;
 	}
+
+	/* and that the unpin work is consistent wrt ->pending. */
+	smp_rmb();
 
 	intel_crtc->unpin_work = NULL;
 
@@ -7317,14 +7324,23 @@ void intel_prepare_page_flip(struct drm_device *dev, int plane)
 		to_intel_crtc(dev_priv->plane_to_crtc_mapping[plane]);
 	unsigned long flags;
 
+	/* NB: An MMIO update of the plane base pointer will also
+	 * generate a page-flip completion irq, i.e. every modeset
+	 * is also accompanied by a spurious intel_prepare_page_flip().
+	 */
 	spin_lock_irqsave(&dev->event_lock, flags);
-	if (intel_crtc->unpin_work) {
-		if ((++intel_crtc->unpin_work->pending) > 1)
-			DRM_ERROR("Prepared flip multiple times\n");
-	} else {
-		DRM_DEBUG_DRIVER("preparing flip with no unpin work?\n");
-	}
+	if (intel_crtc->unpin_work)
+		atomic_inc_not_zero(&intel_crtc->unpin_work->pending);
 	spin_unlock_irqrestore(&dev->event_lock, flags);
+}
+
+inline static void intel_mark_page_flip_active(struct intel_crtc *intel_crtc)
+{
+	/* Ensure that the work item is consistent when activating it ... */
+	smp_wmb();
+	atomic_set(&intel_crtc->unpin_work->pending, INTEL_FLIP_PENDING);
+	/* and that it is marked active as soon as the irq could fire. */
+	smp_wmb();
 }
 
 static int intel_gen2_queue_flip(struct drm_device *dev,
@@ -7356,15 +7372,21 @@ static int intel_gen2_queue_flip(struct drm_device *dev,
 		flip_mask = MI_WAIT_FOR_PLANE_B_FLIP;
 	else
 		flip_mask = MI_WAIT_FOR_PLANE_A_FLIP;
-	OUT_RING(MI_WAIT_FOR_EVENT | flip_mask);
-	OUT_RING(MI_NOOP);
-	OUT_RING(MI_DISPLAY_FLIP |
-		 MI_DISPLAY_FLIP_PLANE(intel_crtc->plane));
-	OUT_RING(fb->pitches[0]);
-	OUT_RING(obj->gtt_offset + offset);
-	OUT_RING(0); /* aux display base address, unused */
-	ADVANCE_LP_RING();
-out:
+	intel_ring_emit(ring, MI_WAIT_FOR_EVENT | flip_mask);
+	intel_ring_emit(ring, MI_NOOP);
+	intel_ring_emit(ring, MI_DISPLAY_FLIP |
+			MI_DISPLAY_FLIP_PLANE(intel_crtc->plane));
+	intel_ring_emit(ring, fb->pitches[0]);
+	intel_ring_emit(ring, obj->gtt_offset + intel_crtc->dspaddr_offset);
+	intel_ring_emit(ring, 0); /* aux display base address, unused */
+
+	intel_mark_page_flip_active(intel_crtc);
+	intel_ring_advance(ring);
+	return 0;
+
+err_unpin:
+	intel_unpin_fb_obj(obj);
+err:
 	return ret;
 }
 
@@ -7394,16 +7416,21 @@ static int intel_gen3_queue_flip(struct drm_device *dev,
 		flip_mask = MI_WAIT_FOR_PLANE_B_FLIP;
 	else
 		flip_mask = MI_WAIT_FOR_PLANE_A_FLIP;
-	OUT_RING(MI_WAIT_FOR_EVENT | flip_mask);
-	OUT_RING(MI_NOOP);
-	OUT_RING(MI_DISPLAY_FLIP_I915 |
-		 MI_DISPLAY_FLIP_PLANE(intel_crtc->plane));
-	OUT_RING(fb->pitches[0]);
-	OUT_RING(obj->gtt_offset + offset);
-	OUT_RING(MI_NOOP);
+	intel_ring_emit(ring, MI_WAIT_FOR_EVENT | flip_mask);
+	intel_ring_emit(ring, MI_NOOP);
+	intel_ring_emit(ring, MI_DISPLAY_FLIP_I915 |
+			MI_DISPLAY_FLIP_PLANE(intel_crtc->plane));
+	intel_ring_emit(ring, fb->pitches[0]);
+	intel_ring_emit(ring, obj->gtt_offset + intel_crtc->dspaddr_offset);
+	intel_ring_emit(ring, MI_NOOP);
 
-	ADVANCE_LP_RING();
-out:
+	intel_mark_page_flip_active(intel_crtc);
+	intel_ring_advance(ring);
+	return 0;
+
+err_unpin:
+	intel_unpin_fb_obj(obj);
+err:
 	return ret;
 }
 
@@ -7440,9 +7467,15 @@ static int intel_gen4_queue_flip(struct drm_device *dev,
 	 */
 	pf = 0;
 	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
-	OUT_RING(pf | pipesrc);
-	ADVANCE_LP_RING();
-out:
+	intel_ring_emit(ring, pf | pipesrc);
+
+	intel_mark_page_flip_active(intel_crtc);
+	intel_ring_advance(ring);
+	return 0;
+
+err_unpin:
+	intel_unpin_fb_obj(obj);
+err:
 	return ret;
 }
 
@@ -7477,9 +7510,15 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
 	 */
 	pf = 0;
 	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
-	OUT_RING(pf | pipesrc);
-	ADVANCE_LP_RING();
-out:
+	intel_ring_emit(ring, pf | pipesrc);
+
+	intel_mark_page_flip_active(intel_crtc);
+	intel_ring_advance(ring);
+	return 0;
+
+err_unpin:
+	intel_unpin_fb_obj(obj);
+err:
 	return ret;
 }
 
@@ -7511,6 +7550,8 @@ static int intel_gen7_queue_flip(struct drm_device *dev,
 	intel_ring_emit(ring, (fb->pitches[0] | obj->tiling_mode));
 	intel_ring_emit(ring, (obj->gtt_offset));
 	intel_ring_emit(ring, (MI_NOOP));
+
+	intel_mark_page_flip_active(intel_crtc);
 	intel_ring_advance(ring);
 out:
 	return ret;
@@ -9117,6 +9158,16 @@ static void quirk_ssc_force_disable(struct drm_device *dev)
 	dev_priv->quirks |= QUIRK_LVDS_SSC_DISABLE;
 }
 
+/*
+ * A machine (e.g. Acer Aspire 5734Z) may need to invert the panel backlight
+ * brightness value
+ */
+static void quirk_invert_brightness(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	dev_priv->quirks |= QUIRK_INVERT_BRIGHTNESS;
+}
+
 struct intel_quirk {
 	int device;
 	int subsystem_vendor;
@@ -9124,7 +9175,35 @@ struct intel_quirk {
 	void (*hook)(struct drm_device *dev);
 };
 
-struct intel_quirk intel_quirks[] = {
+/* For systems that don't have a meaningful PCI subdevice/subvendor ID */
+struct intel_dmi_quirk {
+	void (*hook)(struct drm_device *dev);
+	const struct dmi_system_id (*dmi_id_list)[];
+};
+
+static int intel_dmi_reverse_brightness(const struct dmi_system_id *id)
+{
+	DRM_INFO("Backlight polarity reversed on %s\n", id->ident);
+	return 1;
+}
+
+static const struct intel_dmi_quirk intel_dmi_quirks[] = {
+	{
+		.dmi_id_list = &(const struct dmi_system_id[]) {
+			{
+				.callback = intel_dmi_reverse_brightness,
+				.ident = "NCR Corporation",
+				.matches = {DMI_MATCH(DMI_SYS_VENDOR, "NCR Corporation"),
+					    DMI_MATCH(DMI_PRODUCT_NAME, ""),
+				},
+			},
+			{ }  /* terminating entry */
+		},
+		.hook = quirk_invert_brightness,
+	},
+};
+
+static struct intel_quirk intel_quirks[] = {
 	/* HP Mini needs pipe A force quirk (LP: #322104) */
 	{ 0x27ae, 0x103c, 0x361a, quirk_pipea_force },
 
@@ -9149,6 +9228,18 @@ struct intel_quirk intel_quirks[] = {
 
 	/* Sony Vaio Y cannot use SSC on LVDS */
 	{ 0x0046, 0x104d, 0x9076, quirk_ssc_force_disable },
+
+	/* Acer Aspire 5734Z must invert backlight brightness */
+	{ 0x2a42, 0x1025, 0x0459, quirk_invert_brightness },
+
+	/* Acer/eMachines G725 */
+	{ 0x2a42, 0x1025, 0x0210, quirk_invert_brightness },
+
+	/* Acer/eMachines e725 */
+	{ 0x2a42, 0x1025, 0x0212, quirk_invert_brightness },
+
+	/* Acer/Packard Bell NCL20 */
+	{ 0x2a42, 0x1025, 0x034b, quirk_invert_brightness },
 };
 
 static void intel_init_quirks(struct drm_device *dev)
@@ -9165,6 +9256,10 @@ static void intel_init_quirks(struct drm_device *dev)
 		    (d->subsystem_device == q->subsystem_device ||
 		     q->subsystem_device == PCI_ANY_ID))
 			q->hook(dev);
+	}
+	for (i = 0; i < ARRAY_SIZE(intel_dmi_quirks); i++) {
+		if (dmi_check_system(*intel_dmi_quirks[i].dmi_id_list) != 0)
+			intel_dmi_quirks[i].hook(dev);
 	}
 }
 
@@ -9236,16 +9331,152 @@ void intel_modeset_init(struct drm_device *dev)
 	i915_disable_vga(dev);
 	intel_setup_outputs(dev);
 
-	intel_init_clock_gating(dev);
+		/* Inconsistent output/port/pipe state happens presumably due to
+		 * a bug in one of the get_hw_state functions. Or someplace else
+		 * in our code, like the register restore mess on resume. Clamp
+		 * things to off as a safer default. */
+		list_for_each_entry(connector,
+				    &dev->mode_config.connector_list,
+				    base.head) {
+			if (connector->encoder != encoder)
+				continue;
+
+			intel_connector_break_all_links(connector);
+		}
+	}
+	/* Enabled encoders without active connectors will be fixed in
+	 * the crtc fixup. */
+}
+
+static void i915_redisable_vga(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	u32 vga_reg;
+
+	if (HAS_PCH_SPLIT(dev))
+		vga_reg = CPU_VGACNTRL;
+	else
+		vga_reg = VGACNTRL;
+
+	if (I915_READ(vga_reg) != VGA_DISP_DISABLE) {
+		DRM_DEBUG_KMS("Something enabled VGA plane, disabling it\n");
+		I915_WRITE(vga_reg, VGA_DISP_DISABLE);
+		POSTING_READ(vga_reg);
+	}
+}
+
+/* Scan out the current hw modeset state, sanitizes it and maps it into the drm
+ * and i915 state tracking structures. */
+void intel_modeset_setup_hw_state(struct drm_device *dev,
+				  bool force_restore)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	enum pipe pipe;
+	u32 tmp;
+	struct intel_crtc *crtc;
+	struct intel_encoder *encoder;
+	struct intel_connector *connector;
+
+	if (IS_HASWELL(dev)) {
+		tmp = I915_READ(TRANS_DDI_FUNC_CTL(TRANSCODER_EDP));
+
+		if (tmp & TRANS_DDI_FUNC_ENABLE) {
+			switch (tmp & TRANS_DDI_EDP_INPUT_MASK) {
+			case TRANS_DDI_EDP_INPUT_A_ON:
+			case TRANS_DDI_EDP_INPUT_A_ONOFF:
+				pipe = PIPE_A;
+				break;
+			case TRANS_DDI_EDP_INPUT_B_ONOFF:
+				pipe = PIPE_B;
+				break;
+			case TRANS_DDI_EDP_INPUT_C_ONOFF:
+				pipe = PIPE_C;
+				break;
+			}
+
+			crtc = to_intel_crtc(dev_priv->pipe_to_crtc_mapping[pipe]);
+			crtc->cpu_transcoder = TRANSCODER_EDP;
+
+			DRM_DEBUG_KMS("Pipe %c using transcoder EDP\n",
+				      pipe_name(pipe));
+		}
+	}
+
+	for_each_pipe(pipe) {
+		crtc = to_intel_crtc(dev_priv->pipe_to_crtc_mapping[pipe]);
+
+		tmp = I915_READ(PIPECONF(crtc->cpu_transcoder));
+		if (tmp & PIPECONF_ENABLE)
+			crtc->active = true;
+		else
+			crtc->active = false;
+
+		crtc->base.enabled = crtc->active;
+
+		DRM_DEBUG_KMS("[CRTC:%d] hw state readout: %s\n",
+			      crtc->base.base.id,
+			      crtc->active ? "enabled" : "disabled");
+	}
+
+	if (IS_HASWELL(dev))
+		intel_ddi_setup_hw_pll_state(dev);
+
+	list_for_each_entry(encoder, &dev->mode_config.encoder_list,
+			    base.head) {
+		pipe = 0;
+
+		if (encoder->get_hw_state(encoder, &pipe)) {
+			encoder->base.crtc =
+				dev_priv->pipe_to_crtc_mapping[pipe];
+		} else {
+			encoder->base.crtc = NULL;
+		}
+
+		encoder->connectors_active = false;
+		DRM_DEBUG_KMS("[ENCODER:%d:%s] hw state readout: %s, pipe=%i\n",
+			      encoder->base.base.id,
+			      drm_get_encoder_name(&encoder->base),
+			      encoder->base.crtc ? "enabled" : "disabled",
+			      pipe);
+	}
+
+	list_for_each_entry(connector, &dev->mode_config.connector_list,
+			    base.head) {
+		if (connector->get_hw_state(connector)) {
+			connector->base.dpms = DRM_MODE_DPMS_ON;
+			connector->encoder->connectors_active = true;
+			connector->base.encoder = &connector->encoder->base;
+		} else {
+			connector->base.dpms = DRM_MODE_DPMS_OFF;
+			connector->base.encoder = NULL;
+		}
+		DRM_DEBUG_KMS("[CONNECTOR:%d:%s] hw state readout: %s\n",
+			      connector->base.base.id,
+			      drm_get_connector_name(&connector->base),
+			      connector->base.encoder ? "enabled" : "disabled");
+	}
+
+	/* HW state is read out, now we need to sanitize this mess. */
+	list_for_each_entry(encoder, &dev->mode_config.encoder_list,
+			    base.head) {
+		intel_sanitize_encoder(encoder);
+	}
 
 	if (IS_IRONLAKE_M(dev)) {
 		ironlake_enable_drps(dev);
 		intel_init_emon(dev);
 	}
 
-	if (IS_GEN6(dev) || IS_GEN7(dev)) {
-		gen6_enable_rps(dev_priv);
-		gen6_update_ring_freq(dev_priv);
+	if (force_restore) {
+		for_each_pipe(pipe) {
+			crtc = to_intel_crtc(dev_priv->pipe_to_crtc_mapping[pipe]);
+			intel_set_mode(&crtc->base, &crtc->base.mode,
+				       crtc->base.x, crtc->base.y, crtc->base.fb);
+		}
+
+		i915_redisable_vga(dev);
+	} else {
+		intel_modeset_update_staged_output_state(dev);
 	}
 
 	INIT_WORK(&dev_priv->idle_work, intel_idle_update);
@@ -9303,13 +9534,10 @@ void intel_modeset_cleanup(struct drm_device *dev)
 	/* flush any delayed tasks or pending work */
 	flush_scheduled_work();
 
-	/* Shut off idle work before the crtcs get freed. */
-	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
-		intel_crtc = to_intel_crtc(crtc);
-		del_timer_sync(&intel_crtc->idle_timer);
-	}
-	del_timer_sync(&dev_priv->idle_timer);
-	cancel_work_sync(&dev_priv->idle_work);
+	/* destroy backlight, if any, before the connectors */
+	intel_panel_destroy_backlight(dev);
+
+	drm_mode_config_cleanup(dev);
 
 	drm_mode_config_cleanup(dev);
 }

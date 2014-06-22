@@ -558,7 +558,7 @@ static void intel_lvds_destroy(struct drm_connector *connector)
 	struct drm_device *dev = connector->dev;
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
-	intel_panel_destroy_backlight(dev);
+	intel_panel_fini(&lvds_connector->base.panel);
 
 	if (dev_priv->lid_notifier.notifier_call)
 		acpi_lid_notifier_unregister(&dev_priv->lid_notifier);

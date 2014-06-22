@@ -2352,21 +2352,41 @@ static bool ring_passed_seqno(struct intel_ring_buffer *ring, u32 seqno)
 	return i915_seqno_passed(ring->get_seqno(ring), seqno);
 }
 
-static int
-i915_gem_object_flush_fence(struct drm_i915_gem_object *obj,
-			    struct intel_ring_buffer *pipelined)
+static void i915_gem_write_fence__ipi(void *data)
 {
-	int ret;
+	wbinvd();
+}
 
-	if (obj->fenced_gpu_access) {
-		if (obj->base.write_domain & I915_GEM_GPU_DOMAINS) {
-			ret = i915_gem_flush_ring(obj->last_fenced_ring,
-						  0, obj->base.write_domain);
-			if (ret)
-				return ret;
-		}
+static void i915_gem_object_update_fence(struct drm_i915_gem_object *obj,
+					 struct drm_i915_fence_reg *fence,
+					 bool enable)
+{
+	struct drm_device *dev = obj->base.dev;
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	int fence_reg = fence_number(dev_priv, fence);
 
-		obj->fenced_gpu_access = false;
+	/* In order to fully serialize access to the fenced region and
+	 * the update to the fence register we need to take extreme
+	 * measures on SNB+. In theory, the write to the fence register
+	 * flushes all memory transactions before, and coupled with the
+	 * mb() placed around the register write we serialise all memory
+	 * operations with respect to the changes in the tiler. Yet, on
+	 * SNB+ we need to take a step further and emit an explicit wbinvd()
+	 * on each processor in order to manually flush all memory
+	 * transactions before updating the fence register.
+	 */
+	if (HAS_LLC(obj->base.dev))
+		on_each_cpu(i915_gem_write_fence__ipi, NULL, 1);
+	i915_gem_write_fence(dev, fence_reg, enable ? obj : NULL);
+
+	if (enable) {
+		obj->fence_reg = fence_reg;
+		fence->obj = obj;
+		list_move_tail(&fence->lru_list, &dev_priv->mm.fence_list);
+	} else {
+		obj->fence_reg = I915_FENCE_REG_NONE;
+		fence->obj = NULL;
+		list_del_init(&fence->lru_list);
 	}
 
 	if (obj->last_fenced_seqno && pipelined != obj->last_fenced_ring) {
@@ -3404,13 +3424,14 @@ i915_gem_pin_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 
-	obj->user_pin_count++;
-	obj->pin_filp = file;
-	if (obj->user_pin_count == 1) {
-		ret = i915_gem_object_pin(obj, args->alignment, true);
+	if (obj->user_pin_count == 0) {
+		ret = i915_gem_object_pin(obj, args->alignment, true, false);
 		if (ret)
 			goto out;
 	}
+
+	obj->user_pin_count++;
+	obj->pin_filp = file;
 
 	/* XXX - flush the CPU caches for pinned objects
 	 * as the X server doesn't manage domains yet
