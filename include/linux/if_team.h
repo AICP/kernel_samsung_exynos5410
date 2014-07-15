@@ -113,6 +113,22 @@ struct team {
 
 	const struct team_mode *mode;
 	struct team_mode_ops ops;
+	bool user_carrier_enabled;
+	bool queue_override_enabled;
+	struct list_head *qom_lists; /* array of queue override mapping lists */
+	bool port_mtu_change_allowed;
+	struct {
+		unsigned int count;
+		unsigned int interval; /* in ms */
+		atomic_t count_pending;
+		struct delayed_work dw;
+	} notify_peers;
+	struct {
+		unsigned int count;
+		unsigned int interval; /* in ms */
+		atomic_t count_pending;
+		struct delayed_work dw;
+	} mcast_rejoin;
 	long mode_priv[TEAM_MODE_PRIV_LONGS];
 };
 
