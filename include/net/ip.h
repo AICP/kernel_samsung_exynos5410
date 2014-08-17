@@ -269,6 +269,7 @@ void __ip_select_ident(struct iphdr *iph, int segs);
 
 static inline void ip_select_ident_segs(struct sk_buff *skb, struct sock *sk, int segs)
 {
+	struct iphdr *iph = ip_hdr(skb);
 	if (iph->frag_off & htons(IP_DF)) {
 		/* This is only to work around buggy Windows95/2000
 		 * VJ compression implementations.  If the ID field
