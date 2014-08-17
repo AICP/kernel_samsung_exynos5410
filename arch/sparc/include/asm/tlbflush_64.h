@@ -19,6 +19,24 @@ extern void flush_tsb_user(struct tlb_batch *tb);
 
 /* TLB flush operations. */
 
+static inline void flush_tlb_mm(struct mm_struct *mm)
+{
+}
+
+static inline void flush_tlb_page(struct vm_area_struct *vma,
+				  unsigned long vmaddr)
+{
+}
+
+static inline void flush_tlb_range(struct vm_area_struct *vma,
+				   unsigned long start, unsigned long end)
+{
+}
+
+void flush_tlb_kernel_range(unsigned long start, unsigned long end);
+
+#define __HAVE_ARCH_ENTER_LAZY_MMU_MODE
+
 extern void flush_tlb_pending(void);
 
 #define flush_tlb_range(vma,start,end)	\
@@ -33,19 +51,17 @@ extern void __flush_tlb_kernel_range(unsigned long start, unsigned long end);
 
 #ifndef CONFIG_SMP
 
-#define flush_tlb_kernel_range(start,end) \
-do {	flush_tsb_kernel_range(start,end); \
-	__flush_tlb_kernel_range(start,end); \
-} while (0)
+static inline void global_flush_tlb_page(struct mm_struct *mm, unsigned long vaddr)
+{
+	__flush_tlb_page(CTX_HWBITS(mm->context), vaddr);
+}
 
 #else /* CONFIG_SMP */
 
 extern void smp_flush_tlb_kernel_range(unsigned long start, unsigned long end);
 
-#define flush_tlb_kernel_range(start, end) \
-do {	flush_tsb_kernel_range(start,end); \
-	smp_flush_tlb_kernel_range(start, end); \
-} while (0)
+#define global_flush_tlb_page(mm, vaddr) \
+	smp_flush_tlb_page(mm, vaddr)
 
 #endif /* ! CONFIG_SMP */
 
