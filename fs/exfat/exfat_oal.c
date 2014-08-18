@@ -122,13 +122,15 @@ static time_t accum_days_in_year[] = {
 	0,   0,  31,  59,  90, 120, 151, 181, 212, 243, 273, 304, 334, 0, 0, 0,
 };
 
-TIMESTAMP_T *tm_current(TIMESTAMP_T *tp)
+
+TIMESTAMP_T *tm_current(TIMESTAMP_T *tp, UINT8 tz_utc)
 {
 	struct timespec ts = CURRENT_TIME_SEC;
 	time_t second = ts.tv_sec;
 	time_t day, leap_day, month, year;
 
-	second -= sys_tz.tz_minuteswest * SECS_PER_MIN;
+	if (!tz_utc)
+		second -= sys_tz.tz_minuteswest * SECS_PER_MIN;
 
 	/* Jan 1 GMT 00:00:00 1980. But what about another time zone? */
 	if (second < UNIX_SECS_1980) {

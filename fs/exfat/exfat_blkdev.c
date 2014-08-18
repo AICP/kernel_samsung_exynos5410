@@ -144,10 +144,9 @@ s32 bdev_write(struct super_block *sb, u32 secno, struct buffer_head *bh, u32 nu
 		return FFS_MEDIAERR;
 
 	if (secno == bh->b_blocknr) {
-		lock_buffer(bh);
 		set_buffer_uptodate(bh);
 		mark_buffer_dirty(bh);
-		unlock_buffer(bh);
+
 		if (sync && (sync_dirty_buffer(bh) != 0))
 			return FFS_MEDIAERR;
 	} else {
