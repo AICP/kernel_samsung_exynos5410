@@ -59,11 +59,10 @@ struct exfat_mount_options {
 	unsigned short codepage;    /* codepage for shortname conversions */
 	char *iocharset;            /* charset for filename input/display */
 	unsigned char casesensitive;
-	unsigned char tz_utc;
-	unsigned char errors;   
-#if EXFAT_CONFIG_DISCARD
-	unsigned char discard; 
-#endif
+	unsigned char errors;       /* on error: continue, panic, remount-ro */
+#ifdef CONFIG_EXFAT_DISCARD
+	unsigned char discard;      /* flag on if -o dicard specified and device support discard() */
+#endif /* CONFIG_EXFAT_DISCARD */
 };
 
 #define EXFAT_HASH_BITS    8

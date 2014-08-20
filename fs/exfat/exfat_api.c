@@ -482,25 +482,6 @@ int FsRemoveDir(struct inode *inode, FILE_ID_T *fid)
 	return err;
 } /* end of FsRemoveDir */
 
-INT32 FsRemoveEntry(struct inode *inode, FILE_ID_T *fid)
-{
-	INT32 err;
-	struct super_block *sb = inode->i_sb;
-	FS_INFO_T *p_fs = &(EXFAT_SB(sb)->fs_info);
-
-	if (fid == NULL) return(FFS_INVALIDFID);
-
-	sm_P(&(fs_struct[p_fs->drv].v_sem));
-
-	err = ffsRemoveEntry(inode, fid);
-
-	sm_V(&(fs_struct[p_fs->drv].v_sem));
-
-	return(err);
-}
-
-
-
 EXPORT_SYMBOL(FsMountVol);
 EXPORT_SYMBOL(FsUmountVol);
 EXPORT_SYMBOL(FsGetVolInfo);
@@ -519,7 +500,6 @@ EXPORT_SYMBOL(FsMapCluster);
 EXPORT_SYMBOL(FsCreateDir);
 EXPORT_SYMBOL(FsReadDir);
 EXPORT_SYMBOL(FsRemoveDir);
-EXPORT_SYMBOL(FsRemoveEntry);
 
 #ifdef CONFIG_EXFAT_KERNEL_DEBUG
 /* FsReleaseCache: Release FAT & buf cache */
